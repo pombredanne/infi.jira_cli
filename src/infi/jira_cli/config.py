@@ -1,28 +1,44 @@
-from schematics.models import Model
-from schematics.types import StringType
-from os import path
+from os import path, getenv
 
-CONFIGFILE_PATH = path.expanduser(path.join("~", ".jissue"))
+CONFIGFILE_PATH_DEFAULT = path.expanduser(path.join("~", ".jissue"))
 
 
-class Configuration(Model):
-    fqdn = StringType(required=True)
-    username = StringType(required=True)
-    password = StringType(required=True)
+class ConfigurationError(Exception):
+    pass
+
+
+class Configuration(object):
+    def __init__(self):
+        self.jira_fqdn = ''
+        self.confluence_fqdn = ''
 
     @classmethod
-    def from_file(cls, filepath=None):
-        from json import load
-        filepath = filepath or CONFIGFILE_PATH
-        with open(filepath) as fd:
-            return cls(**load(fd))
+    def get_filepath(cls):
+        return getenv("INFI_JIRA_CLI_CONFIG_PATH", CONFIGFILE_PATH_DEFAULT)
 
-    def save(self, filepath=None):
+    @classmethod
+    def from_file(cls):
+        from json import load
+        filepath = cls.get_filepath()
+        if not path.exists(filepath):
+            raise ConfigurationError("Configuration file does not exist, run 'jissue config set'")
+        with open(filepath) as fd:
+            data = load(fd)
+        self = cls()
+        for key, value in data.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        return self
+
+    def serialize(self):
+        return dict(jira_fqdn=self.jira_fqdn, confluence_fqdn=self.confluence_fqdn)
+
+    def save(self):
         from json import dump
-        filepath = filepath or CONFIGFILE_PATH
+        filepath = self.get_filepath()
         with open(filepath, 'w') as fd:
-            dump(self.to_python(), fd, indent=4)
+            dump(self.serialize(), fd, indent=4)
 
     def to_json(self, indent=False):
         from json import dumps
-        return dumps(self.to_python(), indent=indent)
+        return dumps(self.serialize(), indent=indent)

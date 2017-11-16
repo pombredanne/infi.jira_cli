@@ -1,6 +1,31 @@
 Overview
 ========
-A small command-line tool for those things in JIRA that we do several times a day.
+A small set of command-line tools for those things in JIRA that we do several times a day.
+
+
+Example
+-------
+With jissue, you can do the following:
+
+    jissue create MYPROJECT "THIS IS A TICKET"
+
+This prints out the ticket information, and with that you can do:
+
+    jissue comment <TICKET> "this is my comment"
+
+
+Virtualenv-style
+----------------
+If you work with JIRA alot, its annoying to type in the project/issue key all the sime
+Starting from version 0.1, jissue ships with `jish`, which is a shell wrapper, similar to `virtualenv`.
+`jish` sets up the following environment variables: `JISSUE_PROJECT`, `JISSUE_VERSION`, `JISSUE_COMPONENT`, `JISSUE_ISSUE`, which `jissue` treats as defaults. You can use this variables to set up your zsh prompt.
+Here's a simple demonstration to show when this is useful:
+
+    jish project MYPROJECT # by default, it uses the upcoming unreleased version, and 'unknown component'
+    jish create task "this is a test\nthis is the description"
+    jissue commit --file=file-a --file=file-b "this message will be appended to the ticket numeber"
+    jissue comment "you can also just comment on the ticket without mentioning it explicitly"
+    jissue resolve  # this will deactivate
 
 
 Installation Instructions
@@ -10,61 +35,28 @@ Install the package
 
     easy_install -U infi.jira_cli
 
-Install the shell completion helper
 
-    easy_install -U infi.docopt_completion
-    docopt-completion jissue
+Add the following shell command to your zsh/bash setup:
+
+    jish () {
+        eval $(POSIXLY_CORRECT= <full-path-to-jish> "$@")
+    }
+
 
 Set-up your JIRA information
 
     jissue config set jira.your.domain your-username your-password
 
-
-Usage
-=========================
-
-    jissue
-    infinidat jira issue command-line tool
-
-    Usage:
-        jissue list [--sort-by=<column-name>] [--reverse]
-        jissue start <issue>
-        jissue stop <issue>
-        jissue show <issue>
-        jissue create <project> <summary> [--short] [--issue-type=<issue-type>] [--component=<component>]
-        jissue comment <issue> <message>
-        jissue resolve (<issue> [<message>] | --commit=<commit>) [--resolve-as=<resolution>] [--fix-version=<version>]
-        jissue link <issue> <target-issue> [<message>] [--link-type=<link-type>]
-        jissue config show
-        jissue config set <fqdn> <username> <password>
-
-    Options:
-        --sort-by=<column-name>      column to sort by [default: Rank]
-        --resolve-as=<resolution>    resolution string [default: Fixed]
-        --issue-type=<issue-type>    issue type string [default: Bug]
-        --link-type=<link-type>      link type string [default: Duplicate]
-        --commit=<commit>            deduce issue and message from git commit
-        --help
-
-    More Information:
-        jissue list                 lists open issues assigned to selffg
-        jissue start                start progress
-        jissue stop                 stop progress
-        jissue create               create a new issue
-        jissue comment              add a comment to an existing issue
-        jissue resolve              resolve an open issue as fixed
-        jissue link                 link between two issues
-
+The configuration pathname defaults to `~/.jissue`. You can
+override it with the `INFI_JIRA_CLI_CONFIG_PATH` environment
+variable.
 
 Checking out the code
 =====================
 
-You must install the dependencies first:
+Run the following:
 
     easy_install -U infi.projector
-
-and then, run:
-
     projector devenv build
 
 

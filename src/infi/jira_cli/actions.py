@@ -7,57 +7,67 @@ def format(value, slice=None):
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%d %H:%M")
     if isinstance(value, (list, tuple)):
-        if len(value) and isinstance(value[0], (Comment, )):
+        if len(value) and isinstance(value[0], Comment):
             from .jira_adapter import from_jira_formatted_datetime
-            return "\n\n".join([u"{0} added a comment - {1}\n{2}".format(item.author.displayName,
+            return "\n\n".join(["{0} added a comment - {1}\n{2}".format(item.author.displayName,
                                                                          format(from_jira_formatted_datetime(item.created)),
                                                                          item.body)
-                              for item in value])
-        if len(value) and isinstance(value[0], (IssueLink, )):
+                                for item in value])
+        if len(value) and isinstance(value[0], IssueLink):
             from .jira_adapter import issue_mappings
             get_linked_issue = lambda item: getattr(item, "inwardIssue", getattr(item, "outwardIssue", None))
-            get_link_text = lambda item: item.type.inward if hasattr(item, "inwardIssue") else item.type.outward
-            return "\n\n".join(["u{0:<20} {1:<15} {2:<15} {3}".format(get_link_text(item),
-                                                                      issue_mappings['Key'](get_linked_issue(item)),
-                                                                      issue_mappings['Status'](get_linked_issue(item)),
-                                                                      issue_mappings['Summary'](get_linked_issue(item)))
+            get_link_text = lambda item: '<%s'%item.type.inward if hasattr(item, "inwardIssue") else '>%s'%item.type.outward
+
+            return "\n\n".join(["{0:<20} {1:<15} {2:<15} {3}".format(get_link_text(item),
+                                                                     issue_mappings['Key'](get_linked_issue(item)),
+                                                                     issue_mappings['Status'](get_linked_issue(item)),
+                                                                     issue_mappings['Summary'](get_linked_issue(item)))
                                 for item in value])
-        if len(value) and isinstance(value[0], (Issue, )):
+        if len(value) and isinstance(value[0], Issue):
             from .jira_adapter import issue_mappings
-            return "\n".join(["u{0:<20} {1:<15} {2:<15} {3}".format('',
-                                                                    issue_mappings['Key'](item),
-                                                                    issue_mappings['Status'](item),
-                                                                    issue_mappings['Summary'](item))
+            return "\n".join(["{0:<20} {1:<15} {2:<15} {3}".format('',
+                                                                   issue_mappings['Key'](item),
+                                                                   issue_mappings['Status'](item),
+                                                                   issue_mappings['Summary'](item))
                               for item in value])
         return ', '.join(value)
-    return unicode(value)[:slice]
+    return str(value)[:slice]
+
+
+def _stringify(item):
+    try:
+        return str(item)
+    except:
+        return ''
 
 
 def _list_issues(arguments, issues):
+    from prettytable import PrettyTable
     from .jira_adapter import from_jira_formatted_datetime, issue_mappings
-    columns = ["Rank", "Type", "Key", "Summary", "Status", "Created", "Updated"]
-    FORMAT = "{:<8}{:<15}{:<20}{:<50}{:<15}{:<20}{:<20}"
+    table = PrettyTable(["Rank", "Type", "Key", "Summary", "Status", "Created", "Updated"])
+    table.align = 'l'
     sortby_column = arguments.get("--sort-by").capitalize()
     reverse = arguments.get("--reverse")
-    data = [{column: issue_mappings[column](issue) for column in columns}
-            for issue in issues]
-    sorted_data = sorted(data, key=lambda item: item[sortby_column], reverse=reverse)
-
-    print(FORMAT.format(*columns))
-    for item in sorted_data:
-        print(FORMAT.format(*[format(item[column], 47) for column in columns]))
+    for issue in issues:
+        table.add_row([_stringify(issue_mappings[column](issue)) for column in table.field_names])
+    print(table.get_string(reversesort=reverse, sortby=sortby_column, align='l'))
 
 
 def list_issues(arguments):
     from .jira_adapter import get_issues__assigned_to_me, get_issues__assigned_to_user
     user = arguments.get("--assignee")
-    issues = get_issues__assigned_to_user(user) if user else get_issues__assigned_to_me()
+    project = arguments.get("<project>")
+    issues = get_issues__assigned_to_user(user, project) if user else get_issues__assigned_to_me(project)
     _list_issues(arguments, issues)
 
 
 def search(arguments):
-    from .jira_adapter import search_issues
-    return _list_issues(arguments, search_issues(arguments.get("<query>")))
+    from .jira_adapter import search_issues, get_query_by_filter
+    query = arguments.get("<query>")
+    _filter = arguments.get("--filter")
+    if _filter:
+        query = get_query_by_filter(_filter)
+    return _list_issues(arguments, search_issues(query))
 
 
 def start(arguments):
@@ -70,9 +80,10 @@ def stop(arguments):
     stop_progress(arguments.get("<issue>"))
 
 
-def show(arguments):
+def get_issue_pretty(key):
     from textwrap import dedent
-    template = u"""
+    from string import printable
+    template = """
     {Project} / {Key}
     {Summary}
 
@@ -100,9 +111,22 @@ def show(arguments):
                 "Created", "Updated", "Labels",
                 "Description", "Comments", "IssueLinks", "SubTasks"]
     from .jira_adapter import get_issue, issue_mappings
-    issue = get_issue(arguments.get("<issue>"))
+    issue = get_issue(key)
     kwargs = {item: format(issue_mappings[item](issue)) for item in keywords}
-    print(dedent(template).format(**kwargs))
+    data = dedent(template).format(**kwargs)
+    data = ''.join([item for item in data if item in printable])
+    return data
+
+
+def show(arguments):
+    print(get_issue_pretty(arguments.get("<issue>")))
+
+
+def get(arguments):
+    from .jira_adapter import get_issue, get_custom_fields
+    customfield = get_custom_fields()[arguments.get("<customfield>")]
+    issue = get_issue(arguments.get("<issue>"))
+    print(getattr(issue.fields(), customfield))
 
 
 def comment(arguments):
@@ -110,80 +134,66 @@ def comment(arguments):
     comment_on_issue(arguments.get("<issue>"), arguments.get("<message>"))
 
 
-def _get_issue_key_and_message_from_commit(commit_string):
-    from gitpy import LocalRepository
-    from json import dumps
-    git = LocalRepository(".")
-    commit = git._getCommitByPartialHash(commit_string)
-    describe = git._getOutputAssertSuccess("git describe --tags {0}".format(commit.name)).strip()
-    subject = '{0} '.format(commit.getSubject())
-    key, message = subject.split(' ', 1)
-    body = commit.getMessageBody()
-    template = """\nresolved in commit:\n{{noformat}}\n{}\n{{noformat}}"""
-    value = dict(hash=commit.name, describe=describe, summary=message, body=body)
-    return key, template.format(dumps(value, indent=True))
-
-
 def resolve(arguments):
-    from .jira_adapter import resolve_issue, get_next_release_name
+    from .jira_adapter import resolve_issue, get_next_release_name_for_issue
     from string import capwords
-    commit = arguments.get("--commit")
-    if commit:
-        key, message = _get_issue_key_and_message_from_commit(commit)
-        arguments['<issue>'] = key
-        arguments['<message>'] = message
     key = arguments.get("<issue>")
-    fix_version = arguments.get("--fix-version") or get_next_release_name(key)
+    fix_version = arguments.get("--fix-version") or get_next_release_name_for_issue(key)
     resolution = capwords(arguments.get("--resolve-as"))
     resolve_issue(key, resolution, [fix_version])
-    if arguments.get("<message>"):
-        comment(arguments)
     print("{0} resolved in version {1}".format(key, fix_version))
 
 
 def link(arguments):
     from .jira_adapter import create_link
     from string import capwords
-    create_link(capwords(arguments.get("--link-type")), arguments.get("<issue>"),
-                arguments.get("<target-issue>"), arguments.get("<message>"))
+    create_link(capwords(arguments.get("<link-type>")), arguments.get("<issue>"), arguments.get("<target-issue>"))
 
 
 def create(arguments):
-    from .jira_adapter import create_issue
+    from .config import Configuration
+    from .jira_adapter import create_issue, get_next_release_name_in_project
     from string import capwords
     project_key = arguments.get("<project>").upper()
-    summary = arguments.get("<summary>")
+    details = arguments.get("<details>")
+    description = arguments.get("<description>")
+    component_name = arguments.get("--component") or None
+    issue_type_name = capwords(arguments.get("<issue-type>"))
+    fix_version_name = arguments.get("--fix-version") or get_next_release_name_in_project(project_key)
     component_name = arguments.get("--component")
-    issue_type_name = capwords(arguments.get("--issue-type"))
-    issue = create_issue(project_key, summary, component_name, issue_type_name)
+    assignee = Configuration.from_file().username if arguments.get("--assign-to-me") else "-1"
+    additional_fields = [item.split(':=') for item in arguments.get("--field", list())]
+    issue = create_issue(project_key, issue_type_name, component_name, fix_version_name, details, assignee, additional_fields)
     print(issue.key) if arguments.get("--short") else show({"<issue>": issue.key})
     return issue.key
 
 
 def assign(arguments):
-    from .jira_adapter import assign_issue
+    from .jira_adapter import assign_issue, get_auth
     from .config import Configuration
     key = arguments.get("<issue>")
-    assignee = arguments.get("<assignee>") if arguments.get("<assignee>") else \
+    assignee = arguments.get("--assignee") if arguments.get("--assignee") else \
         "-1" if arguments.get("--automatic") else \
-        Configuration.from_file().username if arguments.get("--to-me") else None  # --to-no-one
+        get_auth(Configuration.from_file().jira_fqdn).username if arguments.get("--to-me") else None  # --to-no-one
     assign_issue(key, assignee)
 
 
 def config_show(arguments):
     from .config import Configuration
-    try:
-        print(Configuration.from_file().to_json(indent=True))
-    except IOError:
-        print("Configuration file does not exist")
+    print(Configuration.from_file().to_json(indent=True))
 
 
 def config_set(arguments):
-    from .config import Configuration
+    from .config import Configuration, ConfigurationError
 
-    values = {item: getattr(arguments, "<{0}>".format(item))
-              for item in ['fqdn', 'username', 'password']}
-    config = Configuration(**values)
+    try:
+        config = Configuration.from_file()
+    except ConfigurationError:
+        config = Configuration()
+    for key in ['jira_fqdn', 'confluence_fqdn']:
+        value = getattr(arguments, "<{0}>".format(key), None)
+        if value is not None:
+            setattr(config, key, value)
     config.save()
 
 
@@ -200,9 +210,95 @@ def inventory(arguments):
             "Resolve types": resolution_names})
 
 
+def history(arguments):
+    from .jira_adapter import get_jira, search_issues
+    from string import capwords
+    from pprint import pprint
+    project_key = arguments.get("<project>")
+    jira = get_jira()
+    items = []
+    issues = search_issues('project={}'.format(project_key), expand='changelog')
+    print(','.join(['key', 'datetime', 'from', 'to']))
+    for issue in issues:
+        for history in issue.changelog().histories:
+            for change in history.items:
+                if change.field == 'status' and change.fromString != change.toString:
+                    print(','.join([issue.key, history.created, change.fromString, change.toString]))
+
+
+
 def label(arguments):
     from .jira_adapter import add_labels_to_issue
-    add_labels_to_issue(arguments.get("<issue>"), arguments.get("<label>"))
+    add_labels_to_issue(arguments.get("<issue>"), arguments.get("--label"))
+
+
+def reopen(arguments):
+    from .jira_adapter import reopen
+    reopen(arguments.get("<issue>"))
+
+
+def commit(arguments):
+    from .jira_adapter import get_issue, get_auth
+    from .config import Configuration
+    from infi.execute import execute_assert_success
+    from sys import stdin, stdout, stderr
+    from subprocess import Popen
+
+    args = ["git", "commit"] + arguments.get("--file")
+    message = arguments.get("<message>") or ''
+    key = arguments.get("<issue>")
+    data = get_issue_pretty(key)
+    username = get_auth(Configuration.from_file().jira_fqdn).username
+    shame = '@{} why you no put commit message'.format(username)
+    args += ["--message", "{} {}".format(key, message if message else shame),
+             "--message", '='*80 + '\n' + data]
+    if message:
+        execute_assert_success(args)
+    else:
+        args += ["--edit"]
+        Popen(args, stdout=stdout, stderr=stderr, stdin=stdin).wait()
+
+
+def filters(arguments):
+    from .jira_adapter import get_jira
+    from prettytable import PrettyTable
+    table = PrettyTable(["name", "query"])
+    table.align = 'l'
+    for _filter in get_jira().favourite_filters():
+        table.add_row([_filter.name, _filter.jql])
+    print(table)
+
+
+def plugins_show_all(arguments):
+    from prettytable import PrettyTable
+    from .plugins import get_plugins
+    table = PrettyTable(["name", "type", "enabled", "installed version", 'marketplace version', 'license', 'license expires at'])
+    table.align = 'l'
+    for plugin in get_plugins():
+        table.add_row([plugin.name, plugin.type, plugin.is_enabled(),
+                       plugin.installed_version, plugin.marketplace_version,
+                       'Evaluation' if plugin.license_details.evaluation else plugin.license_details.type,
+                       plugin.license_details.end_date])
+    print(table)
+
+
+def plugins_show_actionable(arguments):
+    from prettytable import PrettyTable
+    from .plugins import get_plugins
+    from datetime import datetime
+    table = PrettyTable(["name", "installed version", 'marketplace version', 'license', 'license expires at', 'license expires in'])
+    table.align = 'l'
+    for plugin in get_plugins():
+        if plugin.type != "User":
+            continue
+        if not plugin.is_update_available() and not plugin.is_license_expires_soon():
+            continue
+        table.add_row([plugin.name,
+                       plugin.installed_version, plugin.marketplace_version,
+                       'evaluation' if plugin.license_details.evaluation else plugin.license_details.type,
+                       plugin.license_details.end_date,
+                       '{} days'.format((plugin.license_details.end_date - datetime.now()).days) if plugin.license_details.end_date else ''])
+    print(table)
 
 
 def get_mappings():
@@ -211,14 +307,20 @@ def get_mappings():
         start=start,
         stop=stop,
         show=show,
+        get=get,
         create=create,
         comment=comment,
         resolve=resolve,
         link=link,
         inventory=inventory,
+        history=history,
         assign=assign,
         search=search,
         label=label,
+        commit=commit,
+        reopen=reopen,
+        filters=filters,
+        plugins=dict(show=dict(all=plugins_show_all, actionable=plugins_show_actionable)),
         config=dict(show=config_show, set=config_set),
     )
 
